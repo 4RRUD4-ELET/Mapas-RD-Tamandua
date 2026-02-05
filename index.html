@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mapa de Estruturas (Satélite)</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; z-index: 1; }
+        
+        /* Painel de Controle */
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 12px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: 220px;
+            backdrop-filter: blur(4px);
+        }
+        select, button {
+            padding: 10px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 100%;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+        button:active { background-color: #0056b3; transform: scale(0.98); }
+        .status { font-size: 11px; color: #333; text-align: center; margin-top: 5px; }
+
+        /* Ícone do Usuário (Pulsante) */
+        .user-pin {
+            background-color: #4285F4;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 8px rgba(0,0,0,0.5);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(66, 133, 244, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(66, 133, 244, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(66, 133, 244, 0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <label for="zone-select" style="font-size: 12px; font-weight: bold;">Zona UTM:</label>
+        <select id="zone-select" onchange="plotStructures()">
+            <option value="21">Zona 21S (RS/MT)</option>
+            <option value="22">Zona 22S (PR/SP/MS)</option>
+            <option value="23" selected>Zona 23S (MG/RJ/SP/BA)</option>
+            <option value="24">Zona 24S (ES/BA/NE)</option>
+        </select>
+        <button onclick="startLocation()">
+            <span style="font-size:18px">📍</span> Onde estou?
+        </button>
+        <div class="status" id="status-msg">Carregando dados...</div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+
+    <script>
+        // 1. INICIALIZAÇÃO DO MAPA (SATÉLITE)
+        var map = L.map('map').setView([-19.9, -43.9], 10);
+
+        // Camada de Satélite (Esri World Imagery) - Gratuito e visual similar ao Google Earth
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Adiciona rótulos (nomes de ruas/cidades) por cima do satélite para facilitar
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy;OpenStreetMap, &copy;CartoDB',
+            subdomains: 'abcd',
+            maxZoom: 19
+        }).addTo(map);
+
+        var structureLayer = L.layerGroup().addTo(map);
+        var userLayer = L.layerGroup().addTo(map);
+
+        // 2. DADOS (Mantidos do anterior)
+        const rawData = [
+            {id: "SN / CEN3", e: 667131, n: 7802617}, {id: "SN / CE4-CE3", e: 667073, n: 7802650},
+            {id: "SN / CEN4", e: 667042, n: 7803636}, {id: "SN / CE4", e: 667095, n: 7802666},
+            {id: "01 / CE2", e: 667101, n: 7802674}, {id: "02 / CE2", e: 667148, n: 7802701},
+            {id: "03 / CE2", e: 667205, n: 7802739}, {id: "04 / CE4", e: 667226, n: 7802788},
+            {id: "05 / CE4", e: 667281, n: 7802819}, {id: "06 / CE2", e: 667336, n: 7802843},
+            {id: "07 / CE2", e: 667376, n: 7802800}, {id: "08 / CE4", e: 667445, n: 7802817},
+            {id: "09 / CE2", e: 667501, n: 7802847}, {id: "10 / HT-CEN3", e: 667507, n: 7802880},
+            {id: "11 / HT", e: 667469, n: 7803230}, {id: "12 / HT", e: 667279, n: 7803778},
+            {id: "13 / HT", e: 667256, n: 7804091}, {id: "14 / CEN4", e: 667245, n: 7804123},
+            {id: "15 / CE4-CN3", e: 667201, n: 7804196}, {id: "16 / CE3", e: 667155, n: 7804200},
+            {id: "17 / CE4", e: 667208, n: 7804250}, {id: "18 / CE2", e: 667227, n: 7804310},
+            {id: "19 / CE2", e: 667243, n: 7804368}, {id: "20 / CE2", e: 667269, n: 7804438},
+            {id: "21 / CE2", e: 667292, n: 7804481}, {id: "22 / CE2", e: 667332, n: 7804521},
+            {id: "23 / CE2", e: 667381, n: 7804557}, {id: "24 / CE4", e: 667431, n: 7804598},
+            {id: "25 / CE2", e: 667431, n: 7804649}, {id: "26 / CE2", e: 667406, n: 7804709},
+            {id: "27 / CE2", e: 667384, n: 7804751}, {id: "28 / CE2", e: 667323, n: 7804795},
+            {id: "29 / CE4", e: 667284, n: 7804847}, {id: "30 / CE2", e: 667257, n: 7804912},
+            {id: "31 / CE2", e: 667246, n: 7804975}, {id: "32 / CE4", e: 667228, n: 7805035},
+            {id: "33 / CE2", e: 667190, n: 7805088}, {id: "34 / CE2", e: 667159, n: 7805146},
+            {id: "35 / CE4", e: 667152, n: 7805195}, {id: "36 / CE2", e: 667138, n: 7805217},
+            {id: "37 / CE2", e: 667135, n: 7805297}, {id: "38 / CE2", e: 667147, n: 7805357},
+            {id: "39 / TE", e: 667147, n: 7805392}, {id: "40 / TE", e: 667139, n: 7805547},
+            {id: "41 / CE2", e: 667125, n: 7805599}, {id: "42 / CE4", e: 667132, n: 7805664},
+            {id: "43 / CE2", e: 667180, n: 7805673}, {id: "44 / CE2", e: 667238, n: 7805677},
+            {id: "45 / CE2", e: 667283, n: 7805662}, {id: "46 / CE4", e: 667349, n: 7805638},
+            {id: "47 / CE2", e: 667402, n: 7805603}, {id: "48 / CE2", e: 667455, n: 7805574},
+            {id: "49 / CE2", e: 667519, n: 7805600}, {id: "50 / CE2", e: 667594, n: 7805616},
+            {id: "51 / CE4", e: 667645, n: 7805593}, {id: "52 / CE2", e: 667695, n: 7805554},
+            {id: "53 / CE2", e: 667726, n: 7805602}, {id: "54 / CE2", e: 667790, n: 7805629},
+            {id: "55 / CE4", e: 667853, n: 7805652}, {id: "56 / CE2", e: 667872, n: 7805678},
+            {id: "57 / CE2", e: 667860, n: 7805741}, {id: "58 / CE2", e: 667834, n: 7805804},
+            {id: "59 / CE4", e: 667805, n: 7805859}, {id: "60 / CE4", e: 667792, n: 7805908},
+            {id: "61 / CE2", e: 667785, n: 7805967}, {id: "62 / CE2", e: 667799, n: 7806032},
+            {id: "63 / CE4", e: 667810, n: 7806082}, {id: "64 / CE4", e: 667867, n: 7806108},
+            {id: "65 / CE4", e: 667883, n: 7806136}, {id: "66 / CE2", e: 667932, n: 7806140},
+            {id: "67 / CE4", e: 667996, n: 7806131}, {id: "68 / CE2", e: 668039, n: 7806076},
+            {id: "69 / CE3-CE3", e: 668098, n: 7806023}, {id: "70 / CE3", e: 668070, n: 7805986}
+        ];
+
+        // 3. PLOTAGEM DAS ESTRUTURAS
+        function plotStructures() {
+            structureLayer.clearLayers();
+            var bounds = L.latLngBounds();
+            var zone = document.getElementById('zone-select').value;
+            
+            var utmProj = `+proj=utm +zone=${zone} +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs`;
+            var wgs84Proj = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs";
+
+            const customIcon = L.divIcon({
+                className: 'custom-icon',
+                html: '<div style="background: yellow; width: 10px; height: 10px; border-radius: 50%; border: 2px solid black;"></div>',
+                iconSize: [14, 14]
+            });
+
+            rawData.forEach(function(item) {
+                try {
+                    var result = proj4(utmProj, wgs84Proj, [item.e, item.n]);
+                    var marker = L.marker([result[1], result[0]], {icon: customIcon})
+                        .bindPopup(`<b>${item.id}</b><br>N: ${item.n}<br>E: ${item.e}`);
+                    structureLayer.addLayer(marker);
+                    bounds.extend([result[1], result[0]]);
+                } catch(e) {}
+            });
+
+            if (rawData.length > 0) map.fitBounds(bounds, {padding: [50, 50]});
+            document.getElementById('status-msg').innerText = `${rawData.length} estruturas visíveis.`;
+        }
+
+        // 4. SISTEMA DE GEOLOCALIZAÇÃO ROBUSTO
+        function startLocation() {
+            var statusDiv = document.getElementById('status-msg');
+            statusDiv.innerText = "Buscando satélites...";
+
+            if (!navigator.geolocation) {
+                alert("Seu navegador não suporta geolocalização.");
+                return;
+            }
+
+            // Tenta primeiro com alta precisão
+            navigator.geolocation.getCurrentPosition(
+                successLocation, 
+                function(err) {
+                    console.warn("Alta precisão falhou, tentando modo econômico...", err);
+                    // Se falhar (timeout ou erro), tenta com baixa precisão
+                    navigator.geolocation.getCurrentPosition(successLocation, errorLocation, {
+                        enableHighAccuracy: false,
+                        timeout: 15000,
+                        maximumAge: 10000
+                    });
+                }, 
+                {
+                    enableHighAccuracy: true, // Tenta GPS real primeiro
+                    timeout: 10000,           // Espera 10s
+                    maximumAge: 0             // Não aceita cache antigo
+                }
+            );
+        }
+
+        function successLocation(position) {
+            var lat = position.coords.latitude;
+            var lng = position.coords.longitude;
+            var acc = position.coords.accuracy;
+
+            userLayer.clearLayers();
+
+            var userIcon = L.divIcon({ className: 'user-pin' });
+            
+            L.marker([lat, lng], {icon: userIcon})
+                .addTo(userLayer)
+                .bindPopup(`<b>Sua Posição</b><br>Precisão: ~${Math.round(acc)} metros`)
+                .openPopup();
+
+            map.setView([lat, lng], 18); // Zoom bem próximo no usuário
+            document.getElementById('status-msg').innerText = "Localização encontrada!";
+        }
+
+        function errorLocation(err) {
+            var msg = "Erro desconhecido.";
+            if (err.code === 1) msg = "Permissão negada. Verifique as configs do site.";
+            else if (err.code === 2) msg = "GPS indisponível (Tente ir a céu aberto).";
+            else if (err.code === 3) msg = "Demorou muito para responder.";
+            
+            alert("Erro: " + msg + "\n\nDica: Em celulares, este site precisa ser acessado via HTTPS ou localhost para o GPS funcionar corretamente.");
+            document.getElementById('status-msg').innerText = "Falha ao localizar.";
+        }
+
+        // Inicia o mapa
+        plotStructures();
+    </script>
+</body>
+</html>
